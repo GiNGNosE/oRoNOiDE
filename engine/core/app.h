@@ -13,4 +13,5 @@ public:
 private:
     SDL_Window* m_window = nullptr;
     bool m_running = false;
+    VulkanContext m_context;
 };

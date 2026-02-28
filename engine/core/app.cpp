@@ -12,6 +12,15 @@ bool App::init(int width, int height, const char* title) {
 
     if (!m_window) {
         ORO_LOG_ERROR("SDL_CreateWindow failed: %s", SDL_GetError());
+        SDL_Quit();
+        return false;
+    }
+
+    if (!m_context.init(m_window)) {
+        ORO_LOG_ERROR("Failed to initiate Vulkan context");
+        SDL_DestroyWindow(m_window);
+        m_window = nullptr;
+        SDL_Quit();
         return false;
     }
 
@@ -28,13 +37,17 @@ void App::run() {
                 m_running = false;
         }
     }
+    
 }
 
 void App::shutdown() {
+    m_context.shutdown();
+
     if (m_window) {
         SDL_DestroyWindow(m_window);
         m_window = nullptr;
     }
+    
     SDL_Quit();
     ORO_LOG_INFO("App shutdown complete");
 }
