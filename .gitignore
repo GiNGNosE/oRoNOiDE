@@ -1,0 +1,9 @@
+# IDE and editor files
+.cursor
+
+# Build output
+build/
+cmake-build-*/
+
+# 0S junk
+.DS_Store
