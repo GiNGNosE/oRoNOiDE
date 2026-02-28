@@ -43,7 +43,7 @@ target_include_directories(oronoide_render PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/en
 oronoide_enable_warnings(oronoide_render)
 target_link_libraries(oronoide_rhi_vulkan PUBLIC oronoide_core Vulkan::Vulkan)
 target_link_libraries(oronoide_render PUBLIC oronoide_rhi_vulkan)
-target_link_libraries(oronoide_render PUBLIC SDL3::SDL3)
+target_link_libraries(oronoide_core PUBLIC SDL3::SDL3)
 
 add_executable(stone_rendering samples/stone_rendering/main.cpp)
 target_link_libraries(stone_rendering PRIVATE oronoide_render)
