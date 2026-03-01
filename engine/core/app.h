@@ -1,4 +1,6 @@
 #pragma once
+#include "rhi/vulkan/context.h"
+#include "render/renderer.h"
 
 struct SDL_Window;
 
@@ -14,4 +16,5 @@ private:
     SDL_Window* m_window = nullptr;
     bool m_running = false;
     VulkanContext m_context;
+    Renderer m_renderer;
 };
