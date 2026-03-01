@@ -4,6 +4,12 @@
 # Build output
 build/
 cmake-build-*/
+compile_commands.json
+out/
+
+# Editor temp files
+*.swp
+*.swo
 
 # 0S junk
 .DS_Store

@@ -1,6 +1,8 @@
 #include "core/app.h"
 #include "core/log.h"
 #include <SDL3/SDL.h>
+#include <chrono>
+#include <utility>
 
 bool App::init(int width, int height, const char* title) {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -33,18 +35,34 @@ bool App::init(int width, int height, const char* title) {
         return false;
     }
 
+    m_voxelRuntime.initialize();
+    if (!m_voxelRuntime.runDeterministicGateSmoke()) {
+        ORO_LOG_WARN("Voxel runtime smoke gates reported failures");
+    }
+
     ORO_LOG_INFO("Window created: %dx%d", width, height);
     return true;
 }
 
 void App::run() {
     m_running = true;
+    auto lastTick = std::chrono::steady_clock::now();
     while (m_running) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) m_running = false;
         }
+        const auto now = std::chrono::steady_clock::now();
+        const auto delta = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastTick);
+        lastTick = now;
+        m_voxelRuntime.tick(static_cast<uint64_t>(delta.count()));
+        while (auto meshSnapshot = m_voxelRuntime.popPublishedMeshSnapshot()) {
+            (void)m_renderer.ingestVoxelMeshSnapshot(std::move(meshSnapshot->mesh));
+        }
         m_renderer.drawFrame();
+        while (auto visibleVersion = m_renderer.popActivatedMeshVersion()) {
+            (void)m_voxelRuntime.onRendererMeshVisible(*visibleVersion);
+        }
     }
     
 }

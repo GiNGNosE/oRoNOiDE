@@ -1,6 +1,7 @@
 #pragma once
 #include "rhi/vulkan/context.h"
 #include "render/renderer.h"
+#include "voxel/runtime.h"
 
 struct SDL_Window;
 
@@ -17,4 +18,5 @@ private:
     bool m_running = false;
     VulkanContext m_context;
     Renderer m_renderer;
+    oro::voxel::VoxelRuntime m_voxelRuntime;
 };
