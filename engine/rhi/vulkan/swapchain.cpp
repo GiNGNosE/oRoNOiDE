@@ -5,6 +5,7 @@
 
 
 bool VulkanSwapchain::init(VulkanContext& context) {
+    shutdown();
     m_device = context.device();
     if (m_device == VK_NULL_HANDLE ||
         context.physicalDevice() == VK_NULL_HANDLE ||
@@ -109,15 +110,73 @@ bool VulkanSwapchain::init(VulkanContext& context) {
         return false;
     }
 
-    ORO_LOG_INFO("Swapchain created: images=%u format=%d presentMode=%d",
-        imageCount, chosenFormat.format, chosenPresentMode);
+    uint32_t createdImageCount = 0;
+    r = vkGetSwapchainImagesKHR(m_device, m_swapchain, &createdImageCount, nullptr);
+    if (r != VK_SUCCESS || createdImageCount == 0) {
+        ORO_LOG_ERROR("Failed to query Vulkan swapchain images: %d", r);
+        shutdown();
+        return false;
+    }
+
+    m_images.resize(createdImageCount);
+    r = vkGetSwapchainImagesKHR(m_device, m_swapchain, &createdImageCount, m_images.data());
+    if (r != VK_SUCCESS) {
+        ORO_LOG_ERROR("Failed to fetch Vulkan swapchain images: %d", r);
+        shutdown();
+        return false;
+    }
+
+    m_imageViews.clear();
+    m_imageViews.reserve(createdImageCount);
+    for (VkImage image : m_images) {
+        VkImageViewCreateInfo viewCreateInfo{};
+        viewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewCreateInfo.image = image;
+        viewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewCreateInfo.format = chosenFormat.format;
+        viewCreateInfo.components = {
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY};
+        viewCreateInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewCreateInfo.subresourceRange.baseMipLevel = 0;
+        viewCreateInfo.subresourceRange.levelCount = 1;
+        viewCreateInfo.subresourceRange.baseArrayLayer = 0;
+        viewCreateInfo.subresourceRange.layerCount = 1;
+
+        VkImageView imageView = VK_NULL_HANDLE;
+        r = vkCreateImageView(m_device, &viewCreateInfo, nullptr, &imageView);
+        if (r != VK_SUCCESS) {
+            ORO_LOG_ERROR("Failed to create Vulkan swapchain image view: %d", r);
+            shutdown();
+            return false;
+        }
+        m_imageViews.push_back(imageView);
+    }
+
+    m_format = chosenFormat.format;
+    m_extent = extent;
+
+    ORO_LOG_INFO("Swapchain created: images=%u format=%d extent=%ux%u presentMode=%d",
+        createdImageCount, chosenFormat.format, extent.width, extent.height, chosenPresentMode);
     return true;
 }
 
 void VulkanSwapchain::shutdown() {
+    for (VkImageView imageView : m_imageViews) {
+        if (imageView != VK_NULL_HANDLE && m_device != VK_NULL_HANDLE) {
+            vkDestroyImageView(m_device, imageView, nullptr);
+        }
+    }
+    m_imageViews.clear();
+    m_images.clear();
+
     if (m_swapchain != VK_NULL_HANDLE) {
         vkDestroySwapchainKHR(m_device, m_swapchain, nullptr);
         m_swapchain = VK_NULL_HANDLE;
     }
+    m_format = VK_FORMAT_UNDEFINED;
+    m_extent = {};
     m_device = VK_NULL_HANDLE;
 }
