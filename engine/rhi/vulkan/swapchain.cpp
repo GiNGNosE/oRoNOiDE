@@ -109,7 +109,7 @@ bool VulkanSwapchain::init(VulkanContext& context) {
         return false;
     }
 
-    ORO_LOG_ERROR("Swapchain created: images=%u format=%d presentMode=%d",
+    ORO_LOG_INFO("Swapchain created: images=%u format=%d presentMode=%d",
         imageCount, chosenFormat.format, chosenPresentMode);
     return true;
 }
