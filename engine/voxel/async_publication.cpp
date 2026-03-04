@@ -38,11 +38,20 @@ void AsyncPublication::stageOutbox(const SideEffectOutbox& outbox, const Version
     }
 }
 
-void AsyncPublication::stageMeshResult(const VersionToken& token, std::optional<MeshBuffers> mesh, bool stale) {
+void AsyncPublication::stageMeshResult(const VersionToken& token, std::optional<MeshPatchBatch> mesh, bool stale) {
     AsyncArtifacts& entry = entryForToken(token);
     if (!tokenMatches(entry, token)) {
         ++m_telemetry.meshStaleRejected;
         return;
+    }
+    entry.meshHasFallbackChunks = false;
+    if (mesh.has_value()) {
+        for (const ChunkMeshPatch& patch : mesh->patches) {
+            if (patch.forceTwoSidedFallback) {
+                entry.meshHasFallbackChunks = true;
+                break;
+            }
+        }
     }
     entry.mesh = std::move(mesh);
     entry.meshStale = stale;
@@ -116,7 +125,7 @@ bool AsyncPublication::collisionPublishAllowed(const AsyncArtifacts& entry) cons
     return entry.targetVersion > m_fences.collisionVersion;
 }
 
-bool AsyncPublication::publishMeshDomain(std::optional<MeshBuffers>& publishedMesh) {
+bool AsyncPublication::publishMeshDomain(std::optional<MeshPatchBatch>& publishedMesh) {
     uint64_t bestVersion = 0;
     for (const auto& [version, entry] : m_pending) {
         if (meshPublishAllowed(entry) && version > bestVersion) {
@@ -138,6 +147,9 @@ bool AsyncPublication::publishMeshDomain(std::optional<MeshBuffers>& publishedMe
     publishedMesh = std::move(chosen.mesh);
     m_fences.meshProducedVersion = bestVersion;
     ++m_telemetry.meshPublished;
+    if (chosen.meshHasFallbackChunks) {
+        ++m_telemetry.meshFallbackPublished;
+    }
     return true;
 }
 

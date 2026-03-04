@@ -26,7 +26,7 @@ struct WorkerTelemetry {
 
 struct RemeshJobResult {
     VersionToken token{};
-    MeshBuffers mesh{};
+    MeshPatchBatch patchBatch{};
     bool stale = false;
     bool skippedByEpoch = false;
     double computeMs = 0.0;

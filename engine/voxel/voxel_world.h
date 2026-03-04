@@ -18,6 +18,8 @@ inline constexpr int kChunkEdge = 32;
 inline constexpr int kChunkCellCount = kChunkEdge * kChunkEdge * kChunkEdge;
 inline constexpr float kIsoValue = 0.0F;
 inline constexpr float kDefaultVoxelSize = 0.1F;
+inline constexpr bool kDefaultHighFidelitySphereSmoothing = true;
+inline constexpr int kDefaultRedistanceNarrowBandVoxels = 24;
 
 struct ChunkCoord {
     int x = 0;
@@ -78,9 +80,19 @@ public:
     static std::array<float, 3> cellCenterWorld(const ChunkCoord& coord, int localX, int localY, int localZ,
                                                 float voxelSize);
     static float sphereSdf(const std::array<float, 3>& point, const std::array<float, 3>& center, float radius);
+    static float ellipsoidSdf(const std::array<float, 3>& point, const std::array<float, 3>& center,
+                              const std::array<float, 3>& radii);
+    static float noisyStoneSdf(const std::array<float, 3>& point, const std::array<float, 3>& center, float radius,
+                               float noiseAmplitude, float noiseFrequency, uint32_t noiseSeed);
     static std::array<float, 3> sphereGradient(const std::array<float, 3>& point, const std::array<float, 3>& center);
 
-    void seedSphere(const ChunkCoord& coord, const std::array<float, 3>& center, float radius);
+    void seedSdf(const ChunkCoord& coord, const std::function<float(const std::array<float, 3>&)>& sdf,
+                 uint16_t materialId = 1);
+    void seedSphere(const ChunkCoord& coord, const std::array<float, 3>& center, float radius, uint16_t materialId = 1);
+    void seedEllipsoid(const ChunkCoord& coord, const std::array<float, 3>& center, const std::array<float, 3>& radii,
+                       uint16_t materialId = 1);
+    void seedNoisyStone(const ChunkCoord& coord, const std::array<float, 3>& center, float radius, float noiseAmplitude,
+                        float noiseFrequency, uint32_t noiseSeed, uint16_t materialId = 1);
 
     VersionFence versions() const { return m_versions; }
     void incrementTopologyVersion();

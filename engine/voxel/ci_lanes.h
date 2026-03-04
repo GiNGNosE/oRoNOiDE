@@ -22,6 +22,7 @@ public:
                                 const QualityGateEvaluator& evaluator) const;
     LaneReport runSnapshotLifetimeLane() const;
     LaneReport runStalePublishRejectLane() const;
+    LaneReport runShapeDiversityLane() const;
     LaneReport runMeshPayloadPublishLane() const;
     LaneReport runMeshAheadCollisionLane() const;
     LaneReport runDeadlockLane();

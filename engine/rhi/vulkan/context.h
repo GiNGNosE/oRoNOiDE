@@ -14,6 +14,8 @@ public:
     VkQueue          graphicsQueue()  const { return m_graphicsQueue; }
     VkSurfaceKHR     surface()        const { return m_surface; }
     uint32_t         graphicsFamily() const { return m_graphicsFamily; }
+    bool             supportsNonSolidFill() const { return m_fillModeNonSolidSupported; }
+    bool             portabilitySubsetEnabled() const { return m_portabilitySubsetEnabled; }
 
 private:
     bool createInstance();
@@ -32,4 +34,6 @@ private:
     VkQueue                  m_graphicsQueue  = VK_NULL_HANDLE;
     uint32_t                 m_graphicsFamily = 0;
     bool                     m_validationEnabled = false;
+    bool                     m_fillModeNonSolidSupported = false;
+    bool                     m_portabilitySubsetEnabled = false;
 };

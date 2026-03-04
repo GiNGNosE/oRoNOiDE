@@ -25,18 +25,39 @@ namespace oro::voxel {
 
 class VoxelRuntime {
 public:
+    struct RuntimeCounters {
+        uint64_t seedRemeshEnqueued = 0;
+        uint64_t seedPublishCompleted = 0;
+        uint64_t droppedSeamQuads = 0;
+        uint64_t qefIllConditioned = 0;
+        uint64_t qefFallbacks = 0;
+        uint64_t seamRejectedBatches = 0;
+        uint64_t fallbackFlaggedChunks = 0;
+        uint64_t fallbackPublishedBatches = 0;
+        uint64_t redistancePasses = 0;
+        uint64_t redistanceVoxelsConsidered = 0;
+        uint64_t redistanceNarrowBandVoxelsUpdated = 0;
+        double redistanceComputeMsTotal = 0.0;
+        double redistanceComputeMsMax = 0.0;
+    };
+
     VoxelRuntime();
     ~VoxelRuntime();
 
     void initialize();
     void tick(uint64_t deltaMs);
+    bool waitForSeedBootstrapPublish(uint64_t timeoutMs);
 
     bool runDeterministicGateSmoke();
     const VersionFence& versions() const { return m_versions; }
+    const RuntimeCounters& counters() const { return m_counters; }
+    void setHighFidelitySphereSmoothingEnabled(bool enabled) { m_highFidelitySphereSmoothingEnabled = enabled; }
+    bool highFidelitySphereSmoothingEnabled() const { return m_highFidelitySphereSmoothingEnabled; }
     bool onRendererMeshVisible(uint64_t sourceVersion);
     struct PublishedMeshSnapshot {
         VersionToken token{};
-        MeshBuffers mesh;
+        MeshPatchBatch patchBatch;
+        float voxelSize = kDefaultVoxelSize;
     };
     std::optional<PublishedMeshSnapshot> popPublishedMeshSnapshot();
 
@@ -82,6 +103,7 @@ private:
     DiagnosticsTier m_diagnosticsTier = DiagnosticsTier::Compact;
     uint64_t m_rollbackEpoch = 0;
     uint64_t m_generationCounter = 0;
+    uint64_t m_seedTopologyVersion = 0;
     bool m_publicationFrozen = false;
     uint64_t m_frozenElapsedMs = 0;
     uint32_t m_cleanRevalidationTicks = 0;
@@ -89,9 +111,11 @@ private:
     uint32_t m_cleanTicksThresholdHard = 16;
     uint64_t m_cleanFloorMsSoft = 200;
     uint64_t m_cleanFloorMsHard = 300;
-    std::size_t m_rollbackMemoryBudgetBytes = 96U * 1024U * 1024U;
+    std::size_t m_rollbackMemoryBudgetBytes = 256U * 1024U * 1024U;
     std::size_t m_rollbackMaxSlots = 16U;
     uint64_t m_frameCounter = 0;
+    RuntimeCounters m_counters{};
+    bool m_highFidelitySphereSmoothingEnabled = kDefaultHighFidelitySphereSmoothing;
 };
 
 }  // namespace oro::voxel

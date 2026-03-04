@@ -18,6 +18,13 @@ struct TransactionResult {
     uint64_t committedTopologyVersion = 0;
 };
 
+struct RedistanceStats {
+    bool highFidelityEnabled = false;
+    uint64_t voxelsConsidered = 0;
+    uint64_t narrowBandVoxelsUpdated = 0;
+    double computeMs = 0.0;
+};
+
 class VoxelTransaction {
 public:
     explicit VoxelTransaction(VoxelWorld& world);
@@ -35,10 +42,14 @@ public:
     uint64_t targetVersion() const { return m_targetVersion; }
     SideEffectFence& sideEffects() { return m_sideEffects; }
     const SideEffectFence& sideEffects() const { return m_sideEffects; }
+    void setHighFidelityRedistanceEnabled(bool enabled) { m_highFidelityRedistanceEnabled = enabled; }
+    const RedistanceStats& redistanceStats() const { return m_redistanceStats; }
 
 private:
     bool collectTouchedChunks();
-    bool applySphereSdfToChunk(VoxelChunk& chunk, const EditCommand& command);
+    bool applyShapeSdfToChunk(VoxelChunk& chunk, const EditCommand& command);
+    static float signedDistanceForCommand(const std::array<float, 3>& position, const EditCommand& command);
+    bool applyLocalRedistance();
     bool checkChunkInvariants(const VoxelChunk& chunk, std::vector<InvariantFailure>& failures) const;
     bool checkSeamInvariants(std::vector<InvariantFailure>& failures) const;
 
@@ -50,8 +61,10 @@ private:
     bool m_open = false;
     uint64_t m_targetVersion = 0;
     DirtyMetrics m_metrics{};
+    RedistanceStats m_redistanceStats{};
     std::unordered_map<ChunkCoord, VoxelChunk, ChunkCoordHash> m_workingChunks;
     SideEffectFence m_sideEffects;
+    bool m_highFidelityRedistanceEnabled = true;
 };
 
 }  // namespace oro::voxel

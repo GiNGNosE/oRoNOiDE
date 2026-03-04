@@ -139,11 +139,11 @@ void AsyncWorkerRuntime::remeshThreadMain() {
             continue;
         }
         const auto start = std::chrono::steady_clock::now();
-        MeshBuffers mesh = m_mesher.remeshSnapshot(*snapshot);
+        MeshPatchBatch patchBatch = m_mesher.remeshSnapshotPatches(*snapshot);
         const auto end = std::chrono::steady_clock::now();
         const double computeMs = std::chrono::duration<double, std::milli>(end - start).count();
         std::scoped_lock lock(m_mutex);
-        m_remeshResults.push_back({entry.token, std::move(mesh), false, false, computeMs});
+        m_remeshResults.push_back({entry.token, std::move(patchBatch), false, false, computeMs});
     }
 }
 
@@ -183,7 +183,7 @@ void AsyncWorkerRuntime::collisionThreadMain() {
             (void)coord;
             activeCellSum += chunk.activeVoxelCount;
         }
-        const bool ready = activeCellSum > 0 || !snapshot->dirtyChunks.empty();
+        const bool ready = activeCellSum > 0 || !snapshot->meshTargetChunks.empty();
         const auto end = std::chrono::steady_clock::now();
         const double computeMs = std::chrono::duration<double, std::milli>(end - start).count();
         std::scoped_lock lock(m_mutex);

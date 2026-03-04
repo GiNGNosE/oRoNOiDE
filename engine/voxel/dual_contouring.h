@@ -28,6 +28,31 @@ struct MeshBuffers {
     uint64_t sourceTopologyVersion = 0;
 };
 
+struct ChunkMeshPatch {
+    ChunkCoord coord{};
+    MeshBuffers mesh{};
+    bool remove = false;
+    bool forceTwoSidedFallback = false;
+};
+
+struct MeshPatchBatch {
+    struct Diagnostics {
+        uint32_t droppedIncompleteQuads = 0;
+        uint32_t droppedOutOfDomainQuads = 0;
+        uint32_t droppedDuplicateQuads = 0;
+        uint32_t droppedInvalidTriangles = 0;
+        uint32_t droppedDegenerateTriangles = 0;
+        uint32_t droppedDuplicateTriangles = 0;
+        uint32_t componentOrientationFlips = 0;
+        uint32_t fallbackFlaggedChunks = 0;
+        uint32_t illConditionedQef = 0;
+        uint32_t qefFallbacks = 0;
+    };
+    uint64_t sourceTopologyVersion = 0;
+    std::vector<ChunkMeshPatch> patches;
+    Diagnostics diagnostics{};
+};
+
 struct MeshStructuralStats {
     uint32_t nanCount = 0;
     uint32_t invalidIndexCount = 0;
@@ -38,6 +63,7 @@ class DualContouringMesher {
 public:
     MeshBuffers remeshDirtyRegions(const VoxelWorld& world, const std::vector<ChunkCoord>& dirtyChunks) const;
     MeshBuffers remeshSnapshot(const JobSnapshot& snapshot) const;
+    MeshPatchBatch remeshSnapshotPatches(const JobSnapshot& snapshot) const;
     MeshStructuralStats validateStructural(const MeshBuffers& buffers, float voxelSize) const;
 
 private:

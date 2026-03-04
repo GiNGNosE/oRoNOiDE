@@ -14,8 +14,9 @@ struct AsyncArtifacts {
     uint64_t targetVersion = 0;
     uint64_t generation = 0;
     uint64_t rollbackEpoch = 0;
-    std::optional<MeshBuffers> mesh;
+    std::optional<MeshPatchBatch> mesh;
     bool meshStale = false;
+    bool meshHasFallbackChunks = false;
     bool collisionReady = false;
     bool collisionStale = false;
     bool gpuReady = false;
@@ -24,6 +25,7 @@ struct AsyncArtifacts {
 
 struct PublicationTelemetry {
     uint64_t meshPublished = 0;
+    uint64_t meshFallbackPublished = 0;
     uint64_t collisionPublished = 0;
     uint64_t meshStaleRejected = 0;
     uint64_t collisionStaleRejected = 0;
@@ -34,7 +36,7 @@ public:
     explicit AsyncPublication(VersionFence& fences);
 
     void stageOutbox(const SideEffectOutbox& outbox, const VersionToken& token);
-    void stageMeshResult(const VersionToken& token, std::optional<MeshBuffers> mesh, bool stale);
+    void stageMeshResult(const VersionToken& token, std::optional<MeshPatchBatch> mesh, bool stale);
     void stageCollisionResult(const VersionToken& token, bool ready, bool stale);
     void markGpuReady(const VersionToken& token);
     void markCacheReady(const VersionToken& token);
@@ -42,7 +44,7 @@ public:
     void setLatestRequiredMeshVersion(uint64_t version);
     void setLatestRequiredCollisionVersion(uint64_t version);
 
-    bool publishMeshDomain(std::optional<MeshBuffers>& publishedMesh);
+    bool publishMeshDomain(std::optional<MeshPatchBatch>& publishedMesh);
     bool publishCollisionDomain(uint64_t& publishedVersion);
     bool acknowledgeMeshVisible(const VersionToken& token);
     void cancelSuperseded(uint64_t newestTopologyVersion);

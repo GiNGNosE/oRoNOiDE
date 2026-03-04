@@ -15,8 +15,8 @@ struct JobSnapshot {
     uint64_t topologyVersion = 0;
     float voxelSize = kDefaultVoxelSize;
     DirtyMetrics metrics{};
-    std::vector<ChunkCoord> dirtyChunks;
-    std::vector<ChunkCoord> seamHaloChunks;
+    std::vector<ChunkCoord> meshTargetChunks;
+    std::vector<ChunkCoord> sampleHaloChunks;
     std::unordered_map<ChunkCoord, VoxelChunk, ChunkCoordHash> immutableChunks;
 };
 

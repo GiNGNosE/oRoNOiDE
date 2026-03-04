@@ -66,6 +66,30 @@ float VoxelWorld::sphereSdf(const std::array<float, 3>& point, const std::array<
     return dist - radius;
 }
 
+float VoxelWorld::ellipsoidSdf(const std::array<float, 3>& point, const std::array<float, 3>& center,
+                               const std::array<float, 3>& radii) {
+    const float rx = std::max(radii[0], 1.0e-4F);
+    const float ry = std::max(radii[1], 1.0e-4F);
+    const float rz = std::max(radii[2], 1.0e-4F);
+    const float qx = (point[0] - center[0]) / rx;
+    const float qy = (point[1] - center[1]) / ry;
+    const float qz = (point[2] - center[2]) / rz;
+    const float qLen = std::sqrt((qx * qx) + (qy * qy) + (qz * qz));
+    const float minRadius = std::min({rx, ry, rz});
+    return (qLen - 1.0F) * minRadius;
+}
+
+float VoxelWorld::noisyStoneSdf(const std::array<float, 3>& point, const std::array<float, 3>& center, float radius,
+                                float noiseAmplitude, float noiseFrequency, uint32_t noiseSeed) {
+    const float base = sphereSdf(point, center, radius);
+    const float seed = static_cast<float>(noiseSeed) * 0.013F;
+    const float fx = (point[0] + seed) * noiseFrequency;
+    const float fy = (point[1] - (2.0F * seed)) * (noiseFrequency * 1.13F);
+    const float fz = (point[2] + (3.0F * seed)) * (noiseFrequency * 0.87F);
+    const float noise = std::sin(fx) * std::sin(fy) * std::sin(fz);
+    return base - (noiseAmplitude * noise);
+}
+
 std::array<float, 3> VoxelWorld::sphereGradient(const std::array<float, 3>& point, const std::array<float, 3>& center) {
     const float dx = point[0] - center[0];
     const float dy = point[1] - center[1];
@@ -77,7 +101,8 @@ std::array<float, 3> VoxelWorld::sphereGradient(const std::array<float, 3>& poin
     return {dx / len, dy / len, dz / len};
 }
 
-void VoxelWorld::seedSphere(const ChunkCoord& coord, const std::array<float, 3>& center, float radius) {
+void VoxelWorld::seedSdf(const ChunkCoord& coord, const std::function<float(const std::array<float, 3>&)>& sdf,
+                         uint16_t materialId) {
     VoxelChunk& chunk = ensureChunk(coord);
     uint32_t active = 0;
     for (std::size_t i = 0; i < chunk.cells.size(); ++i) {
@@ -87,7 +112,8 @@ void VoxelWorld::seedSphere(const ChunkCoord& coord, const std::array<float, 3>&
         unpackIndex(i, lx, ly, lz);
         const auto world = cellCenterWorld(coord, lx, ly, lz, m_voxelSize);
         VoxelCell& cell = chunk.cells[i];
-        cell.phi = sphereSdf(world, center, radius);
+        cell.phi = sdf(world);
+        cell.material.materialId = materialId;
         cell.material.initialized = true;
         if (cell.phi < kIsoValue) {
             ++active;
@@ -95,6 +121,24 @@ void VoxelWorld::seedSphere(const ChunkCoord& coord, const std::array<float, 3>&
     }
     chunk.activeVoxelCount = active;
     markChunkDirty(coord);
+}
+
+void VoxelWorld::seedSphere(const ChunkCoord& coord, const std::array<float, 3>& center, float radius, uint16_t materialId) {
+    seedSdf(coord, [&](const std::array<float, 3>& p) { return sphereSdf(p, center, radius); }, materialId);
+}
+
+void VoxelWorld::seedEllipsoid(const ChunkCoord& coord, const std::array<float, 3>& center,
+                               const std::array<float, 3>& radii, uint16_t materialId) {
+    seedSdf(coord, [&](const std::array<float, 3>& p) { return ellipsoidSdf(p, center, radii); }, materialId);
+}
+
+void VoxelWorld::seedNoisyStone(const ChunkCoord& coord, const std::array<float, 3>& center, float radius,
+                                float noiseAmplitude, float noiseFrequency, uint32_t noiseSeed, uint16_t materialId) {
+    seedSdf(coord,
+            [&](const std::array<float, 3>& p) {
+                return noisyStoneSdf(p, center, radius, noiseAmplitude, noiseFrequency, noiseSeed);
+            },
+            materialId);
 }
 
 void VoxelWorld::incrementTopologyVersion() {

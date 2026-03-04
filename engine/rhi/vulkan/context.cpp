@@ -226,6 +226,9 @@ bool VulkanContext::createLogicalDevice() {
     const char* portabilitySubsetExtensionName = "VK_KHR_portability_subset";
     if (hasExtension(portabilitySubsetExtensionName)) {
         enabledExtensions.push_back(portabilitySubsetExtensionName);
+        m_portabilitySubsetEnabled = true;
+    } else {
+        m_portabilitySubsetEnabled = false;
     }
 
     float priority = 1.0f;
@@ -242,6 +245,17 @@ bool VulkanContext::createLogicalDevice() {
     dci.enabledExtensionCount = static_cast<uint32_t>(enabledExtensions.size());
     dci.ppEnabledExtensionNames = enabledExtensions.data();
 
+    VkPhysicalDeviceFeatures availableFeatures{};
+    vkGetPhysicalDeviceFeatures(m_physicalDevice, &availableFeatures);
+    VkPhysicalDeviceFeatures enabledFeatures{};
+    if (availableFeatures.fillModeNonSolid == VK_TRUE) {
+        enabledFeatures.fillModeNonSolid = VK_TRUE;
+        m_fillModeNonSolidSupported = true;
+    } else {
+        m_fillModeNonSolidSupported = false;
+    }
+    dci.pEnabledFeatures = &enabledFeatures;
+
     VkResult r = vkCreateDevice(m_physicalDevice, &dci, nullptr, &m_device);
     if (r != VK_SUCCESS) {
         ORO_LOG_ERROR("Failed to create Vulkan logical device: %d", r);
@@ -249,6 +263,9 @@ bool VulkanContext::createLogicalDevice() {
     }
 
     vkGetDeviceQueue(m_device, m_graphicsFamily, 0, &m_graphicsQueue);
+    if (!m_fillModeNonSolidSupported) {
+        ORO_LOG_WARN("Device does not support fillModeNonSolid; wireframe debug mode will be disabled");
+    }
     return true;
 }
 
@@ -345,4 +362,6 @@ void VulkanContext::shutdown() {
         m_instance = VK_NULL_HANDLE;
     }
     m_validationEnabled = false;
+    m_fillModeNonSolidSupported = false;
+    m_portabilitySubsetEnabled = false;
 }

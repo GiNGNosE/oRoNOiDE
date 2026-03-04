@@ -1,4 +1,5 @@
 #include "voxel/ci_lanes.h"
+#include "voxel/ci_protocol.h"
 
 namespace oro::voxel {
 
@@ -28,11 +29,35 @@ LaneReport CiRegressionLanes::runStalePublishRejectLane() const {
     VersionFence fences{};
     AsyncPublication publication(fences);
     publication.setLatestRequiredMeshVersion(5);
-    publication.stageMeshResult(VersionToken{4, 1, 0}, MeshBuffers{}, false);
-    std::optional<MeshBuffers> published;
+    MeshPatchBatch staleBatch{};
+    staleBatch.sourceTopologyVersion = 4;
+    publication.stageMeshResult(VersionToken{4, 1, 0}, staleBatch, false);
+    std::optional<MeshPatchBatch> published;
     const bool any = publication.publishMeshDomain(published);
     const bool pass = !any && fences.meshProducedVersion == 0;
     return {pass, "stale_publish_reject", pass ? 0U : 1U};
+}
+
+LaneReport CiRegressionLanes::runShapeDiversityLane() const {
+    CiProtocol protocol{};
+    const std::vector<CiScenario> scenarios = protocol.buildDeterministicScenarios();
+    bool sawSphere = false;
+    bool sawEllipsoid = false;
+    bool sawNoisyStone = false;
+    for (const CiScenario& scenario : scenarios) {
+        if (scenario.command.shape == EditShape::Sphere) {
+            sawSphere = true;
+        } else if (scenario.command.shape == EditShape::Ellipsoid) {
+            sawEllipsoid = true;
+        } else if (scenario.command.shape == EditShape::NoisyStone) {
+            sawNoisyStone = true;
+        }
+        if (sawSphere && sawEllipsoid && sawNoisyStone) {
+            break;
+        }
+    }
+    const bool pass = sawSphere && sawEllipsoid && sawNoisyStone;
+    return {pass, "shape_diversity", pass ? 0U : 1U};
 }
 
 LaneReport CiRegressionLanes::runMeshPayloadPublishLane() const {
@@ -40,25 +65,30 @@ LaneReport CiRegressionLanes::runMeshPayloadPublishLane() const {
     AsyncPublication publication(fences);
     publication.setLatestRequiredMeshVersion(6);
 
-    MeshBuffers mesh{};
-    mesh.sourceTopologyVersion = 6;
-    mesh.vertices.push_back({});
-    mesh.vertices.push_back({});
-    mesh.indices = {0U, 1U, 0U};
+    MeshPatchBatch batch{};
+    batch.sourceTopologyVersion = 6;
+    ChunkMeshPatch patch{};
+    patch.coord = {0, 0, 0};
+    patch.mesh.sourceTopologyVersion = 6;
+    patch.mesh.vertices.push_back({});
+    patch.mesh.vertices.push_back({});
+    patch.mesh.indices = {0U, 1U, 0U};
+    batch.patches.push_back(std::move(patch));
     const VersionToken token{6, 1, 0};
-    publication.stageMeshResult(token, mesh, false);
+    publication.stageMeshResult(token, batch, false);
     publication.stageCollisionResult(token, true, false);
     uint64_t collisionVersion = 0;
     const bool collisionPublished = publication.publishCollisionDomain(collisionVersion);
 
-    std::optional<MeshBuffers> published;
+    std::optional<MeshPatchBatch> published;
     const bool firstPublished = publication.publishMeshDomain(published);
     const bool payloadIntact = published.has_value() &&
                                published->sourceTopologyVersion == 6 &&
-                               published->vertices.size() == 2U &&
-                               published->indices.size() == 3U;
+                               published->patches.size() == 1U &&
+                               published->patches.front().mesh.vertices.size() == 2U &&
+                               published->patches.front().mesh.indices.size() == 3U;
 
-    std::optional<MeshBuffers> duplicate;
+    std::optional<MeshPatchBatch> duplicate;
     const bool duplicatePublished = publication.publishMeshDomain(duplicate);
     const bool duplicateRejected = !duplicatePublished;
     const bool pass = collisionPublished && firstPublished && payloadIntact && duplicateRejected &&
@@ -71,17 +101,17 @@ LaneReport CiRegressionLanes::runMeshAheadCollisionLane() const {
     AsyncPublication publication(fences);
     publication.setLatestRequiredMeshVersion(3);
     publication.setLatestRequiredCollisionVersion(3);
-    MeshBuffers mesh{};
-    mesh.sourceTopologyVersion = 3;
+    MeshPatchBatch batch{};
+    batch.sourceTopologyVersion = 3;
     const VersionToken token{3, 1, 0};
-    publication.stageMeshResult(token, mesh, false);
-    std::optional<MeshBuffers> publishedBeforeCollision;
+    publication.stageMeshResult(token, batch, false);
+    std::optional<MeshPatchBatch> publishedBeforeCollision;
     const bool meshPublishedBeforeCollision = publication.publishMeshDomain(publishedBeforeCollision);
 
     publication.stageCollisionResult(token, true, false);
     uint64_t collisionVersion = 0;
     const bool collisionPublished = publication.publishCollisionDomain(collisionVersion);
-    std::optional<MeshBuffers> publishedAfterCollision;
+    std::optional<MeshPatchBatch> publishedAfterCollision;
     const bool meshPublishedAfterCollision = publication.publishMeshDomain(publishedAfterCollision);
     const bool pass = !meshPublishedBeforeCollision && collisionPublished && meshPublishedAfterCollision &&
                       fences.meshProducedVersion == 3 && fences.collisionVersion == 3;

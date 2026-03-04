@@ -36,6 +36,7 @@ endfunction()
 add_library(oronoide_core STATIC
     engine/core/log.cpp
     engine/core/app.cpp
+    engine/core/camera.cpp
 )
 target_include_directories(oronoide_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/engine)
 oronoide_enable_warnings(oronoide_core)
@@ -60,6 +61,13 @@ add_library(oronoide_voxel STATIC
 target_include_directories(oronoide_voxel PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/engine)
 oronoide_enable_warnings(oronoide_voxel)
 
+# material
+add_library(oronoide_material STATIC
+    engine/material/registry.cpp
+)
+target_include_directories(oronoide_material PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/engine)
+oronoide_enable_warnings(oronoide_material)
+
 # vulkan rhi
 add_library(oronoide_rhi_vulkan STATIC
     engine/rhi/vulkan/context.cpp
@@ -77,13 +85,16 @@ oronoide_enable_warnings(oronoide_render)
 target_link_libraries(oronoide_rhi_vulkan PUBLIC oronoide_core Vulkan::Vulkan)
 target_link_libraries(oronoide_render PUBLIC oronoide_rhi_vulkan)
 target_link_libraries(oronoide_render PUBLIC glm::glm)
-target_link_libraries(oronoide_core PUBLIC SDL3::SDL3 oronoide_voxel)
+target_link_libraries(oronoide_core PUBLIC SDL3::SDL3 oronoide_voxel oronoide_material)
+target_link_libraries(oronoide_core PUBLIC glm::glm)
 
 set(ORO_SHADER_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/engine/render/shaders)
 set(ORO_SHADER_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 set(ORO_SHADER_SOURCES
     ${ORO_SHADER_SOURCE_DIR}/voxel_mesh.vert
     ${ORO_SHADER_SOURCE_DIR}/voxel_mesh.frag
+    ${ORO_SHADER_SOURCE_DIR}/shadow_depth.vert
+    ${ORO_SHADER_SOURCE_DIR}/shadow_depth.frag
 )
 
 set(ORO_SHADER_BINARIES)

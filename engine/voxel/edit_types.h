@@ -16,11 +16,22 @@ enum class EditCriticality : uint8_t {
     Hard = 1,
 };
 
+enum class EditShape : uint8_t {
+    Sphere = 0,
+    Ellipsoid = 1,
+    NoisyStone = 2,
+};
+
 struct EditCommand {
     EditMode mode = EditMode::Carve;
     EditCriticality criticality = EditCriticality::Soft;
+    EditShape shape = EditShape::Sphere;
     std::array<float, 3> center = {0.0F, 0.0F, 0.0F};
     float radius = 1.0F;
+    std::array<float, 3> radii = {1.0F, 1.0F, 1.0F};
+    float noiseAmplitude = 0.0F;
+    float noiseFrequency = 1.0F;
+    uint32_t noiseSeed = 0U;
 };
 
 enum class InvariantCode : uint8_t {

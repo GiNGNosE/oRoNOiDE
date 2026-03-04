@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <thread>
 #include <unordered_set>
 #include <utility>
 
@@ -12,9 +14,22 @@ namespace oro::voxel {
 namespace {
 
 using Clock = std::chrono::steady_clock;
+constexpr bool kEnablePeriodicDemoEdits = false;
+constexpr uint32_t kMaxAllowedDroppedOutOfDomainQuads = 0;
+constexpr uint32_t kMaxAllowedDroppedIncompleteQuads = 16;
 
 double toMs(Clock::duration d) {
     return std::chrono::duration<double, std::milli>(d).count();
+}
+
+bool seamIntegrityFailed(const MeshPatchBatch& patchBatch) {
+    if (patchBatch.patches.size() <= 1U) {
+        return false;
+    }
+    if (patchBatch.diagnostics.droppedOutOfDomainQuads > kMaxAllowedDroppedOutOfDomainQuads) {
+        return true;
+    }
+    return patchBatch.diagnostics.droppedIncompleteQuads > kMaxAllowedDroppedIncompleteQuads;
 }
 
 }  // namespace
@@ -30,10 +45,100 @@ VoxelRuntime::~VoxelRuntime() {
 }
 
 void VoxelRuntime::initialize() {
-    m_world.seedSphere({0, 0, 0}, {1.6F, 1.6F, 1.6F}, 1.45F);
+    const float chunkWorldEdge = static_cast<float>(kChunkEdge) * m_world.voxelSize();
+    auto seedAcrossBounds = [&](float minX, float minY, float minZ, float maxX, float maxY, float maxZ,
+                                const auto& seedFn) {
+        const int minChunkX = static_cast<int>(std::floor(minX / chunkWorldEdge)) - 1;
+        const int minChunkY = static_cast<int>(std::floor(minY / chunkWorldEdge)) - 1;
+        const int minChunkZ = static_cast<int>(std::floor(minZ / chunkWorldEdge)) - 1;
+        const int maxChunkX = static_cast<int>(std::floor(maxX / chunkWorldEdge)) + 1;
+        const int maxChunkY = static_cast<int>(std::floor(maxY / chunkWorldEdge)) + 1;
+        const int maxChunkZ = static_cast<int>(std::floor(maxZ / chunkWorldEdge)) + 1;
+        for (int z = minChunkZ; z <= maxChunkZ; ++z) {
+            for (int y = minChunkY; y <= maxChunkY; ++y) {
+                for (int x = minChunkX; x <= maxChunkX; ++x) {
+                    seedFn(ChunkCoord{x, y, z});
+                }
+            }
+        }
+    };
+
+    const std::array<float, 3> sphereCenter{1.6F, 1.6F, 1.6F};
+    constexpr float sphereRadius = 1.45F;
+    seedAcrossBounds(sphereCenter[0] - sphereRadius,
+                     sphereCenter[1] - sphereRadius,
+                     sphereCenter[2] - sphereRadius,
+                     sphereCenter[0] + sphereRadius,
+                     sphereCenter[1] + sphereRadius,
+                     sphereCenter[2] + sphereRadius,
+                     [&](const ChunkCoord& c) { m_world.seedSphere(c, sphereCenter, sphereRadius, 1); });
+
+    const std::array<float, 3> ellipsoidCenter{4.8F, 1.6F, 1.6F};
+    const std::array<float, 3> ellipsoidRadii{1.1F, 1.5F, 0.9F};
+    seedAcrossBounds(ellipsoidCenter[0] - ellipsoidRadii[0],
+                     ellipsoidCenter[1] - ellipsoidRadii[1],
+                     ellipsoidCenter[2] - ellipsoidRadii[2],
+                     ellipsoidCenter[0] + ellipsoidRadii[0],
+                     ellipsoidCenter[1] + ellipsoidRadii[1],
+                     ellipsoidCenter[2] + ellipsoidRadii[2],
+                     [&](const ChunkCoord& c) { m_world.seedEllipsoid(c, ellipsoidCenter, ellipsoidRadii, 2); });
+
+    const std::array<float, 3> stoneCenter{1.6F, 4.6F, 1.8F};
+    constexpr float stoneRadius = 1.2F;
+    constexpr float stoneNoiseAmplitude = 0.18F;
+    constexpr float stoneNoiseFrequency = 3.4F;
+    constexpr uint32_t stoneNoiseSeed = 42U;
+    const float stoneExtent = stoneRadius + stoneNoiseAmplitude;
+    seedAcrossBounds(stoneCenter[0] - stoneExtent,
+                     stoneCenter[1] - stoneExtent,
+                     stoneCenter[2] - stoneExtent,
+                     stoneCenter[0] + stoneExtent,
+                     stoneCenter[1] + stoneExtent,
+                     stoneCenter[2] + stoneExtent,
+                     [&](const ChunkCoord& c) {
+                         m_world.seedNoisyStone(
+                             c, stoneCenter, stoneRadius, stoneNoiseAmplitude, stoneNoiseFrequency, stoneNoiseSeed, 3);
+                     });
+
+    m_world.incrementTopologyVersion();
     m_versions = m_world.versions();
     m_workers.start();
     m_workers.setCurrentEpoch(m_rollbackEpoch);
+    const std::vector<ChunkCoord> seededDirty = m_world.consumeDirtyChunks();
+    if (!seededDirty.empty() && m_versions.topologyVersion > 0U) {
+        DirtyMetrics seedMetrics{};
+        seedMetrics.chunksDirty = static_cast<uint32_t>(seededDirty.size());
+        const VersionToken token = makeToken(m_versions.topologyVersion);
+        m_seedTopologyVersion = m_versions.topologyVersion;
+        m_publication.setLatestRequiredMeshVersion(m_seedTopologyVersion);
+        m_publication.setLatestRequiredCollisionVersion(m_seedTopologyVersion);
+        m_workers.setLatestRequiredMeshVersion(m_seedTopologyVersion);
+        m_workers.setLatestRequiredCollisionVersion(m_seedTopologyVersion);
+        JobSnapshotHandle snapshot = buildSnapshot(m_seedTopologyVersion, seedMetrics, seededDirty);
+        m_workers.enqueueRemesh(snapshot, token);
+        m_workers.enqueueCollision(snapshot, token);
+        ++m_counters.seedRemeshEnqueued;
+    }
+}
+
+bool VoxelRuntime::waitForSeedBootstrapPublish(uint64_t timeoutMs) {
+    if (m_seedTopologyVersion == 0U) {
+        return true;
+    }
+    const auto start = Clock::now();
+    for (;;) {
+        processWorkerResults();
+        if (m_versions.meshProducedVersion >= m_seedTopologyVersion &&
+            m_versions.collisionVersion >= m_seedTopologyVersion) {
+            ++m_counters.seedPublishCompleted;
+            return true;
+        }
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start).count();
+        if (elapsed >= static_cast<int64_t>(timeoutMs)) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
 }
 
 bool VoxelRuntime::prePolicyAllowEdit(const EditCommand& command) const {
@@ -74,15 +179,15 @@ std::vector<ChunkCoord> VoxelRuntime::gateRegionForDirty(const std::vector<Chunk
 
 std::vector<ChunkCoord> VoxelRuntime::seamHaloForDirty(const std::vector<ChunkCoord>& dirty) const {
     std::vector<ChunkCoord> halo;
-    halo.reserve(dirty.size() * 7U);
+    halo.reserve(dirty.size() * 27U);
     for (const ChunkCoord& coord : dirty) {
-        halo.push_back(coord);
-        halo.push_back({coord.x + 1, coord.y, coord.z});
-        halo.push_back({coord.x - 1, coord.y, coord.z});
-        halo.push_back({coord.x, coord.y + 1, coord.z});
-        halo.push_back({coord.x, coord.y - 1, coord.z});
-        halo.push_back({coord.x, coord.y, coord.z + 1});
-        halo.push_back({coord.x, coord.y, coord.z - 1});
+        for (int dz = -1; dz <= 1; ++dz) {
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    halo.push_back({coord.x + dx, coord.y + dy, coord.z + dz});
+                }
+            }
+        }
     }
     std::vector<ChunkCoord> unique;
     unique.reserve(halo.size());
@@ -101,10 +206,11 @@ JobSnapshotHandle VoxelRuntime::buildSnapshot(uint64_t topologyVersion, const Di
     snapshot.topologyVersion = topologyVersion;
     snapshot.voxelSize = m_world.voxelSize();
     snapshot.metrics = metrics;
-    snapshot.dirtyChunks = dirtyChunks;
-    snapshot.seamHaloChunks = seamHaloForDirty(dirtyChunks);
+    snapshot.meshTargetChunks = dirtyChunks;
+    snapshot.sampleHaloChunks = seamHaloForDirty(snapshot.meshTargetChunks);
+    snapshot.immutableChunks.reserve(snapshot.sampleHaloChunks.size());
 
-    for (const ChunkCoord& coord : snapshot.seamHaloChunks) {
+    for (const ChunkCoord& coord : snapshot.sampleHaloChunks) {
         if (const VoxelChunk* chunk = m_world.findChunk(coord); chunk != nullptr) {
             snapshot.immutableChunks.emplace(coord, *chunk);
         }
@@ -196,6 +302,19 @@ bool VoxelRuntime::admitRollbackState(RollbackState state, EditCriticality criti
     const bool bytesFit = (m_rollbackStore.usedBytes() + state.estimatedBytes) <= m_rollbackMemoryBudgetBytes;
     const bool slotsFit = (m_rollbackStore.usedSlots() + 1U) <= m_rollbackMaxSlots;
     if (!bytesFit || !slotsFit) {
+        // #region agent log
+        ORO_LOG_WARN(
+            "Rollback admission rejected: bytesFit=%d slotsFit=%d usedBytes=%zu estimatedBytes=%zu budgetBytes=%zu usedSlots=%zu maxSlots=%zu baselineChunks=%zu dirtyCount=%zu",
+            bytesFit ? 1 : 0,
+            slotsFit ? 1 : 0,
+            m_rollbackStore.usedBytes(),
+            state.estimatedBytes,
+            m_rollbackMemoryBudgetBytes,
+            m_rollbackStore.usedSlots(),
+            m_rollbackMaxSlots,
+            state.chunks.size(),
+            dirty.size());
+        // #endregion
         RuntimeDiagnostic diag{};
         diag.phase = "capture";
         diag.invariantOrPolicyCode = "ROLLBACK_STORE_PRESSURE";
@@ -313,6 +432,7 @@ bool VoxelRuntime::evaluateFrozenRecovery(uint64_t deltaMs) {
 
 bool VoxelRuntime::processEdit(const EditCommand& command, uint64_t deltaMs) {
     VoxelTransaction tx(m_world);
+    tx.setHighFidelityRedistanceEnabled(m_highFidelitySphereSmoothingEnabled);
     if (!tx.begin(command)) {
         ORO_LOG_WARN("Voxel transaction begin failed");
         return false;
@@ -344,6 +464,12 @@ bool VoxelRuntime::processEdit(const EditCommand& command, uint64_t deltaMs) {
         ORO_LOG_WARN("Voxel transaction apply failed");
         return false;
     }
+    const RedistanceStats redistance = tx.redistanceStats();
+    ++m_counters.redistancePasses;
+    m_counters.redistanceVoxelsConsidered += redistance.voxelsConsidered;
+    m_counters.redistanceNarrowBandVoxelsUpdated += redistance.narrowBandVoxelsUpdated;
+    m_counters.redistanceComputeMsTotal += redistance.computeMs;
+    m_counters.redistanceComputeMsMax = std::max(m_counters.redistanceComputeMsMax, redistance.computeMs);
     const TransactionResult commit = tx.commit();
     const auto t2 = Clock::now();
     if (!commit.success) {
@@ -407,18 +533,50 @@ void VoxelRuntime::processWorkerResults() {
             continue;
         }
         m_latencyByVersion[remeshResult->token.version].remeshMs = remeshResult->computeMs;
-        const MeshStructuralStats stats = m_mesher.validateStructural(remeshResult->mesh, m_world.voxelSize());
-        const std::vector<GateViolation> structuralViolations = m_gates.evaluateStructural(stats);
-        if (!structuralViolations.empty()) {
-            ORO_LOG_ERROR("Structural gate failure count: %zu for version=%llu",
-                          structuralViolations.size(),
-                          static_cast<unsigned long long>(remeshResult->token.version));
+        bool structuralFailure = false;
+        for (const ChunkMeshPatch& patch : remeshResult->patchBatch.patches) {
+            if (patch.remove) {
+                continue;
+            }
+            const MeshStructuralStats stats = m_mesher.validateStructural(patch.mesh, m_world.voxelSize());
+            const std::vector<GateViolation> structuralViolations = m_gates.evaluateStructural(stats);
+            if (!structuralViolations.empty()) {
+                ORO_LOG_ERROR("Structural gate failure count: %zu for version=%llu chunk=(%d,%d,%d)",
+                              structuralViolations.size(),
+                              static_cast<unsigned long long>(remeshResult->token.version),
+                              patch.coord.x,
+                              patch.coord.y,
+                              patch.coord.z);
+                structuralFailure = true;
+                break;
+            }
+        }
+        if (structuralFailure) {
             m_publication.stageMeshResult(remeshResult->token, std::nullopt, true);
             (void)restoreRollbackVersion(remeshResult->token.version);
             freezeRuntime("MESH_STRUCTURAL_FAIL", "restore_and_freeze", {});
             continue;
         }
-        m_publication.stageMeshResult(remeshResult->token, remeshResult->mesh, false);
+        m_counters.droppedSeamQuads += remeshResult->patchBatch.diagnostics.droppedIncompleteQuads;
+        if (seamIntegrityFailed(remeshResult->patchBatch)) {
+            ++m_counters.seamRejectedBatches;
+            m_publication.stageMeshResult(remeshResult->token, std::nullopt, true);
+            RuntimeDiagnostic diag{};
+            diag.phase = "worker";
+            diag.invariantOrPolicyCode = "SEAM_INTEGRITY_REJECT";
+            diag.severity = DiagnosticSeverity::Warn;
+            diag.topologyVersion = m_versions.topologyVersion;
+            diag.meshProducedVersion = m_versions.meshProducedVersion;
+            diag.meshVisibleVersion = m_versions.meshVisibleVersion;
+            diag.collisionVersion = m_versions.collisionVersion;
+            diag.actionTaken = "reject_mesh_batch";
+            (void)emitDiagnostic(diag, {}, false);
+            continue;
+        }
+        m_counters.qefIllConditioned += remeshResult->patchBatch.diagnostics.illConditionedQef;
+        m_counters.qefFallbacks += remeshResult->patchBatch.diagnostics.qefFallbacks;
+        m_counters.fallbackFlaggedChunks += remeshResult->patchBatch.diagnostics.fallbackFlaggedChunks;
+        m_publication.stageMeshResult(remeshResult->token, remeshResult->patchBatch, false);
     }
 
     while (true) {
@@ -448,14 +606,33 @@ void VoxelRuntime::processWorkerResults() {
         m_versions.collisionVersion = m_world.versions().collisionVersion;
     }
 
-    std::optional<MeshBuffers> publishedMesh;
+    std::optional<MeshPatchBatch> publishedMesh;
     if (m_publication.publishMeshDomain(publishedMesh) && publishedMesh.has_value()) {
         const auto publishStart = Clock::now();
         const uint64_t publishedVersion = publishedMesh->sourceTopologyVersion;
+        bool publishedHasFallback = false;
+        for (const ChunkMeshPatch& patch : publishedMesh->patches) {
+            if (patch.forceTwoSidedFallback) {
+                publishedHasFallback = true;
+                break;
+            }
+        }
+        if (publishedHasFallback) {
+            ++m_counters.fallbackPublishedBatches;
+        }
         m_world.publishMeshProducedVersion(publishedVersion);
         m_versions.meshProducedVersion = m_world.versions().meshProducedVersion;
         if (const std::optional<VersionToken> token = tokenForVersion(publishedVersion); token.has_value()) {
-            m_publishedMeshSnapshots.push_back({*token, std::move(*publishedMesh)});
+            PublishedMeshSnapshot snapshot{};
+            snapshot.token = *token;
+            snapshot.patchBatch = std::move(*publishedMesh);
+            snapshot.voxelSize = m_world.voxelSize();
+            if (JobSnapshotHandle sourceSnapshot = m_snapshotRegistry.acquire(publishedVersion); sourceSnapshot) {
+                if (sourceSnapshot->voxelSize > 0.0f) {
+                    snapshot.voxelSize = sourceSnapshot->voxelSize;
+                }
+            }
+            m_publishedMeshSnapshots.push_back(std::move(snapshot));
         }
         const auto publishEnd = Clock::now();
         LatencySample sample = m_latencyByVersion[publishedVersion];
@@ -485,13 +662,23 @@ void VoxelRuntime::tick(uint64_t deltaMs) {
     purgeRollbackCandidates(false);
 
     ++m_frameCounter;
-    if (!m_publicationFrozen && m_frameCounter % 180U == 0U) {
+    if (kEnablePeriodicDemoEdits && !m_publicationFrozen && m_frameCounter % 180U == 0U) {
         EditCommand command{};
         command.mode = (m_frameCounter % 360U == 0U) ? EditMode::Fill : EditMode::Carve;
         command.criticality = EditCriticality::Hard;
         command.center = {1.6F, 1.6F, 1.6F};
         command.radius = 0.6F;
         (void)processEdit(command, deltaMs);
+    }
+    if (m_frameCounter % 300U == 0U && m_counters.redistancePasses > 0U) {
+        const double averageMs =
+            m_counters.redistanceComputeMsTotal / static_cast<double>(m_counters.redistancePasses);
+        ORO_LOG_DEBUG("Redistance stats passes=%llu avgMs=%.3f maxMs=%.3f voxels=%llu bandVoxels=%llu",
+                      static_cast<unsigned long long>(m_counters.redistancePasses),
+                      averageMs,
+                      m_counters.redistanceComputeMsMax,
+                      static_cast<unsigned long long>(m_counters.redistanceVoxelsConsidered),
+                      static_cast<unsigned long long>(m_counters.redistanceNarrowBandVoxelsUpdated));
     }
     m_hardGate.tick(deltaMs, m_versions);
 }
@@ -509,11 +696,12 @@ bool VoxelRuntime::runDeterministicGateSmoke() {
     const LaneReport tail = m_lanes.runTailSpikeLane(EditSizeClass::Small, m_latencySamples, m_gates);
     const LaneReport snapshotLife = m_lanes.runSnapshotLifetimeLane();
     const LaneReport staleReject = m_lanes.runStalePublishRejectLane();
+    const LaneReport shapeDiversity = m_lanes.runShapeDiversityLane();
     const LaneReport payloadPublish = m_lanes.runMeshPayloadPublishLane();
     const LaneReport meshAhead = m_lanes.runMeshAheadCollisionLane();
     const LaneReport deadlock = m_lanes.runDeadlockLane();
     const LaneReport fault = m_lanes.runFaultInjectionLane();
-    allOk = allOk && tail.pass && snapshotLife.pass && staleReject.pass && payloadPublish.pass &&
+    allOk = allOk && tail.pass && snapshotLife.pass && staleReject.pass && shapeDiversity.pass && payloadPublish.pass &&
             meshAhead.pass && deadlock.pass && fault.pass;
     return allOk;
 }
